@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 从 VLESS 链接生成 Xray 配置文件
 """
@@ -161,3 +161,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -80,15 +80,41 @@ def create_session():
 
 _tg_session = None
 
-def tg_send(title: str, content: str):
-    """发送 Telegram 消息（Markdown），带自动重试（3次）"""
+def tg_send(title: str, content: str, photo_path: str = None):
+    """发送 Telegram 消息（Markdown），支持附带截图，带自动重试（3次）"""
     global _tg_session
     if _tg_session is None:
         _tg_session = _req.Session()
-        _tg_session.headers.update({"Content-Type": "application/json"})
 
-    url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
+    if not TG_BOT_TOKEN or not TG_CHAT_ID:
+        print("[Telegram] 未配置 BOT_TOKEN 或 CHAT_ID，跳过推送")
+        return
+
     text = f"*{title}*\n\n{content}"
+
+    # 1. 如果有截图且文件存在，优先通过 sendPhoto 发送
+    if photo_path and os.path.exists(photo_path):
+        url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendPhoto"
+        for attempt in range(3):
+            try:
+                with open(photo_path, "rb") as f:
+                    files = {"photo": ("dashboard.png", f, "image/png")}
+                    data = {"chat_id": TG_CHAT_ID, "caption": text[:1024], "parse_mode": "Markdown"}
+                    resp = _tg_session.post(url, data=data, files=files, timeout=25)
+                    result = resp.json()
+                    if result.get("ok"):
+                        print(f"[Telegram] 带截图推送成功 | chat_id={mask(TG_CHAT_ID)}")
+                        return
+                    else:
+                        print(f"[Telegram] 图片推送失败: {result.get('description', 'unknown')}，尝试文本备用...")
+                        break
+            except Exception as e:
+                print(f"[Telegram] 图片发送异常 (第{attempt+1}次): {e}")
+            if attempt < 2:
+                time.sleep(2)
+
+    # 2. 纯文本备用推送
+    url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TG_CHAT_ID, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": True}
 
     for attempt in range(3):
@@ -286,7 +312,16 @@ def browser_login(callback_url):
         sb.open("https://optiklink.net/")
         sb.wait_for_ready_state_complete()
         time.sleep(2)
-        return sb.get_page_source(), sb.get_current_url()
+
+        screenshot_path = "/tmp/optiklink_dashboard.png"
+        try:
+            sb.save_screenshot(screenshot_path)
+            print(f"    📸 Dashboard 登录截图已保存: {screenshot_path}")
+        except Exception as ex:
+            print(f"    ⚠️ 截图保存失败: {ex}")
+            screenshot_path = None
+
+        return sb.get_page_source(), sb.get_current_url(), screenshot_path
 
 def check_dashboard_html(html, final_url):
     """Dashboard检测 - 判断逻辑保持原始不变"""
@@ -415,7 +450,7 @@ def main():
     try:
         oauth_params = discover_oauth_params(session)
         callback_url = discord_authorize(session, oauth_params)
-        html, final_url = browser_login(callback_url)
+        html, final_url, screenshot_path = browser_login(callback_url)
         print(f"[D] Dashboard... 最终URL: {mask_url(final_url)}")
         info = check_dashboard_html(html, final_url)
         server_result = check_and_start_server(session)
@@ -426,13 +461,13 @@ def main():
         error_msg = str(e)
         print(f"❌ 执行失败: {error_msg}")
         report = build_report(info, server_result)
-        tg_send("❌ OptikLink 签到失败", report)
+        tg_send("❌ OptikLink 签到失败", report, photo_path="/tmp/optiklink_dashboard.png")
         print("\n❌ 最终失败，退出。")
         sys.exit(1)
 
     print("✅ 执行成功！")
     report = build_report(info, server_result)
-    tg_send("✅ OptikLink 签到成功", report)
+    tg_send("✅ OptikLink 签到成功", report, photo_path=screenshot_path)
 
 if __name__ == "__main__":
     main()
